@@ -14,7 +14,9 @@ const INSTALLED = join(HOME, 'installed.json');
 const SKILLS_DIR = process.env.KC_SKILLS_DIR || join(homedir(), '.claude', 'skills');
 
 const say = (m = '') => console.log(m);
-const die = (m) => { console.error(`\n❌ ${m}\n`); process.exit(1); };
+// 用丟出錯誤的方式結束，不直接呼叫 process.exit（Windows 上連線還沒關完時強制結束會印出雜訊）
+class UserError extends Error {}
+const die = (m) => { throw new UserError(m); };
 const exists = async (p) => { try { await access(p); return true; } catch { return false; } };
 const readJson = async (p, fallback) => { try { return JSON.parse(await readFile(p, 'utf8')); } catch { return fallback; } };
 const writeJson = async (p, v, mode) => { await mkdir(dirname(p), { recursive: true }); await writeFile(p, JSON.stringify(v, null, 2), { mode }); };
@@ -97,7 +99,7 @@ async function list() {
   say(`\n帳號：${data.email}\n`);
   const tier = { free: '免費體驗', member: '年費會員', advanced: '進階包' };
   for (const p of data.packs) {
-    const state = installed[p.id] ? `已安裝 v${installed[p.id].version}` : p.allowed ? '可安裝' : p.reason === 'MEMBERSHIP_REQUIRED' ? '需要年費會員' : p.reason === 'PURCHASE_REQUIRED' ? '需要購買' : '無法使用';
+    const state = installed[p.id] ? (p.allowed ? `已安裝 v${installed[p.id].version}` : `已安裝 v${installed[p.id].version}（無法更新）`) : p.allowed ? '可安裝' : p.reason === 'MEMBERSHIP_REQUIRED' ? '需要年費會員' : p.reason === 'PURCHASE_REQUIRED' ? '需要購買' : '無法使用';
     say(`  ${p.id.padEnd(14)} ${tier[p.tier].padEnd(6)} ${state.padEnd(14)} ${p.name}`);
   }
   say('\n安裝：kc-skills install 技能包代號\n');
@@ -153,16 +155,17 @@ async function update(pack) {
   const installed = await readJson(INSTALLED, {});
   const targets = pack ? [pack] : Object.keys(installed);
   if (targets.length === 0) { say('\n目前沒有已安裝的技能包。\n'); return; }
-  let updated = 0;
+  let updated = 0, upToDate = 0, blocked = 0;
   for (const id of targets) {
     let v;
     try { v = await authed('version', { method: 'POST', body: { pack: id } }); }
-    catch (e) { say(`  ${id}：${e.message}`); continue; }
-    if (installed[id]?.version === v.version) { say(`  ${id}：已是最新版 v${v.version}`); continue; }
+    catch (e) { say(`  ${id}：${e.message}`); blocked++; continue; }
+    if (installed[id]?.version === v.version) { say(`  ${id}：已是最新版 v${v.version}`); upToDate++; continue; }
     say(`  ${id}：v${installed[id]?.version ?? '?'} → v${v.version}`);
     await install(id); updated++;
   }
-  if (!updated) say('\n都已經是最新版。\n');
+  if (blocked) say('\n有技能包無法更新（原因見上）。已經安裝在你電腦上的內容仍然可以繼續使用。\n');
+  else if (!updated && upToDate) say('\n都已經是最新版。\n');
 }
 
 async function logout() {
@@ -200,5 +203,6 @@ try {
     default: help();
   }
 } catch (e) {
-  die(e.message || '發生未預期的問題。');
+  console.error(`\n❌ ${e instanceof UserError ? e.message : (e?.message || '發生未預期的問題。')}\n`);
+  process.exitCode = 1;
 }
