@@ -21,3 +21,11 @@ npx github:KCKC-TW/kc-skills-cli update     # 更新已安裝的技能包
 - 工具只和 KC 知識庫的伺服器連線，不會讀取你電腦上的其他檔案。
 - 登入憑證存在 `~/.kc-skills/config.json`（只有你能讀），90 天有效，可在網站「技能包」頁撤銷。
 - 技能包內容僅限本人使用，禁止轉售、轉贈或公開散布。
+
+## 用 OpenAI Codex？
+
+在 install 或 update 後面加上 `--codex`，技能會裝到 `~/.codex/skills/`：
+
+```bash
+npx github:KCKC-TW/kc-skills-cli install ig-21 --codex
+```

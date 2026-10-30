@@ -11,7 +11,11 @@ const API = (process.env.KC_SKILLS_API || 'https://ugyjmhgsdkhsnrruykff.supabase
 const HOME = join(homedir(), '.kc-skills');
 const CONFIG = join(HOME, 'config.json');
 const INSTALLED = join(HOME, 'installed.json');
-const SKILLS_DIR = process.env.KC_SKILLS_DIR || join(homedir(), '.claude', 'skills');
+// 安裝位置：預設是 Claude 的技能資料夾；加 --codex 則安裝到 OpenAI Codex 的技能資料夾
+const FLAGS = process.argv.slice(2).filter((a) => a.startsWith('--'));
+const ARGS = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const TARGET = FLAGS.includes('--codex') ? 'codex' : 'claude';
+const SKILLS_DIR = process.env.KC_SKILLS_DIR || (TARGET === 'codex' ? join(homedir(), '.codex', 'skills') : join(homedir(), '.claude', 'skills'));
 
 const say = (m = '') => console.log(m);
 // 用丟出錯誤的方式結束，不直接呼叫 process.exit（Windows 上連線還沒關完時強制結束會印出雜訊）
@@ -188,10 +192,14 @@ KC 技能包安裝工具
   kc-skills update [代號]    更新已安裝的技能包（不指定就全部檢查）
   kc-skills whoami           目前登入的帳號
   kc-skills logout           登出這台電腦
+
+預設安裝到 Claude 的技能資料夾（~/.claude/skills）。
+如果你用的是 OpenAI Codex，在 install 或 update 後面加上 --codex，會安裝到 ~/.codex/skills。
+例如：kc-skills install ig-21 --codex
 `);
 }
 
-const [cmd, arg] = process.argv.slice(2);
+const [cmd, arg] = ARGS;
 try {
   switch (cmd) {
     case 'login': await login(); break;
