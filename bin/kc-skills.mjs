@@ -152,7 +152,7 @@ async function install(pack) {
   say(`   技能：${[...topDirs].join('、')}`);
   say(`   位置：${SKILLS_DIR}`);
   if (backedUp) say(`   （原本同名的 ${backedUp} 個技能已備份到 ${join(HOME, 'backup', stamp)}）`);
-  say('\n請重新開啟 Claude Code，就能使用這些技能。\n');
+  say(`\n請重新開啟 ${TARGET === 'codex' ? 'Codex' : 'Claude Code'}，就能使用這些技能。\n`);
 }
 
 async function update(pack) {
