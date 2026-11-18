@@ -11,11 +11,15 @@ const API = (process.env.KC_SKILLS_API || 'https://ugyjmhgsdkhsnrruykff.supabase
 const HOME = join(homedir(), '.kc-skills');
 const CONFIG = join(HOME, 'config.json');
 const INSTALLED = join(HOME, 'installed.json');
-// 安裝位置：預設是 Claude 的技能資料夾；加 --codex 則安裝到 OpenAI Codex 的技能資料夾
+// 安裝位置：預設是 Claude 的技能資料夾；加 --codex 安裝到 OpenAI Codex、加 --gemini 安裝到 Gemini（Gemini CLI／Antigravity）的技能資料夾
 const FLAGS = process.argv.slice(2).filter((a) => a.startsWith('--'));
 const ARGS = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-const TARGET = FLAGS.includes('--codex') ? 'codex' : 'claude';
-const SKILLS_DIR = process.env.KC_SKILLS_DIR || (TARGET === 'codex' ? join(homedir(), '.codex', 'skills') : join(homedir(), '.claude', 'skills'));
+if (FLAGS.includes('--codex') && FLAGS.includes('--gemini')) { console.error('\n❌ 一次只能選一個：--codex 或 --gemini。\n'); process.exit(1); }
+const TARGET = FLAGS.includes('--gemini') ? 'gemini' : FLAGS.includes('--codex') ? 'codex' : 'claude';
+const TARGET_NAME = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini' }[TARGET];
+const TARGET_DIR = { claude: '.claude', codex: '.codex', gemini: '.gemini' }[TARGET];
+const SKILLS_DIR = process.env.KC_SKILLS_DIR || join(homedir(), TARGET_DIR, 'skills');
+const PENDING = join(HOME, 'pending-login.json');
 
 const say = (m = '') => console.log(m);
 // 用丟出錯誤的方式結束，不直接呼叫 process.exit（Windows 上連線還沒關完時強制結束會印出雜訊）
@@ -70,7 +74,8 @@ function openBrowser(url) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function login() {
+/** 取得確認碼並顯示。回傳 { deviceCode, start }。 */
+async function beginLogin() {
   const deviceCode = randomBytes(24).toString('hex');
   const start = await call('start', { method: 'POST', body: { device_code: deviceCode, device_name: hostname() } });
   say('\n請在瀏覽器完成授權。');
@@ -78,21 +83,53 @@ async function login() {
   say('網頁上顯示的確認碼要和這裡一致，才按「授權這台電腦」。');
   say(`如果瀏覽器沒有自動打開，請手動開啟：\n${start.verification_url}\n`);
   openBrowser(start.verification_url);
+  return { deviceCode, start };
+}
+
+/** 問一次授權結果；已授權就存下憑證並回傳 'approved'，還沒好回傳 'pending'，其他情況直接結束並說明。 */
+async function pollOnce(deviceCode) {
+  const r = await call('poll', { method: 'POST', body: { device_code: deviceCode } });
+  if (r.status === 'approved') {
+    await writeJson(CONFIG, { token: r.token, expires_at: r.expires_at }, 0o600);
+    await rm(PENDING, { force: true });
+    const me = await call('whoami', { token: r.token });
+    say(`\n\n✅ 已登入：${me.email}`);
+    say('接著可以輸入：kc-skills list');
+    return 'approved';
+  }
+  if (r.status === 'denied') { await rm(PENDING, { force: true }); die('你在網頁上按了「拒絕」。'); }
+  if (r.status === 'expired' || r.status === 'used') { await rm(PENDING, { force: true }); die('這次授權已過期，請重新執行 login。'); }
+  return 'pending';
+}
+
+async function login() {
+  // 兩步驟模式（給 Gemini、Codex 這類要等指令結束才顯示畫面的環境）：
+  //   login --start   只顯示確認碼與網址，立刻結束
+  //   login --finish  確認有沒有授權完成（最多等約 20 秒；還沒好就再執行一次）
+  if (FLAGS.includes('--start')) {
+    const { deviceCode, start } = await beginLogin();
+    await writeJson(PENDING, { device_code: deviceCode, user_code: start.user_code, expires_at: Date.now() + start.expires_in * 1000 }, 0o600);
+    say('完成網頁授權後，請執行：kc-skills login --finish\n');
+    return;
+  }
+  if (FLAGS.includes('--finish')) {
+    const pend = await readJson(PENDING, null);
+    if (!pend?.device_code) die('找不到進行中的登入。請先執行：kc-skills login --start');
+    if (Date.now() > pend.expires_at) { await rm(PENDING, { force: true }); die('這次授權已過期，請重新執行：kc-skills login --start'); }
+    for (let i = 0; i < 7; i++) {
+      if (await pollOnce(pend.device_code) === 'approved') return;
+      await sleep(3000);
+    }
+    say(`\n還在等你在網頁上授權（確認碼 ${pend.user_code}）。授權後請再執行一次：kc-skills login --finish\n`);
+    return;
+  }
+  const { deviceCode, start } = await beginLogin();
   const deadline = Date.now() + start.expires_in * 1000;
   process.stdout.write('等待授權中');
   while (Date.now() < deadline) {
     await sleep(3000);
     process.stdout.write('.');
-    const r = await call('poll', { method: 'POST', body: { device_code: deviceCode } });
-    if (r.status === 'approved') {
-      await writeJson(CONFIG, { token: r.token, expires_at: r.expires_at }, 0o600);
-      const me = await call('whoami', { token: r.token });
-      say(`\n\n✅ 已登入：${me.email}`);
-      say('接著可以輸入：kc-skills list');
-      return;
-    }
-    if (r.status === 'denied') die('你在網頁上按了「拒絕」。');
-    if (r.status === 'expired' || r.status === 'used') die('這次授權已過期，請重新執行 login。');
+    if (await pollOnce(deviceCode) === 'approved') return;
   }
   die('等太久了，授權已過期。請重新執行 login。');
 }
@@ -144,7 +181,7 @@ async function install(pack) {
     await writeFile(target, Buffer.from(f.content_base64, 'base64'));
   }
   const installed = await readJson(INSTALLED, {});
-  installed[pack] = { version: data.version, installed_at: new Date().toISOString(), skills: [...topDirs] };
+  installed[pack] = { version: data.version, installed_at: new Date().toISOString(), skills: [...topDirs], target: TARGET };
   await writeJson(INSTALLED, installed);
   await writeJson(join(HOME, 'licenses', `${pack}.json`), data.license);
 
@@ -152,7 +189,7 @@ async function install(pack) {
   say(`   技能：${[...topDirs].join('、')}`);
   say(`   位置：${SKILLS_DIR}`);
   if (backedUp) say(`   （原本同名的 ${backedUp} 個技能已備份到 ${join(HOME, 'backup', stamp)}）`);
-  say(`\n請重新開啟 ${TARGET === 'codex' ? 'Codex' : 'Claude Code'}，就能使用這些技能。\n`);
+  say(`\n請重新開啟 ${TARGET_NAME}，就能使用這些技能。\n`);
 }
 
 async function update(pack) {
@@ -187,6 +224,8 @@ function help() {
 KC 技能包安裝工具
 
   kc-skills login            登入（會開啟瀏覽器，核對確認碼後授權）
+  kc-skills login --start    登入第一步：只顯示確認碼與網址就結束（給 Gemini、Codex 等用）
+  kc-skills login --finish   登入第二步：網頁授權後執行，確認登入完成
   kc-skills list             看有哪些技能包、哪些可以安裝
   kc-skills install <代號>   安裝技能包，例如：kc-skills install ig-21
   kc-skills update [代號]    更新已安裝的技能包（不指定就全部檢查）
@@ -195,7 +234,8 @@ KC 技能包安裝工具
 
 預設安裝到 Claude 的技能資料夾（~/.claude/skills）。
 如果你用的是 OpenAI Codex，在 install 或 update 後面加上 --codex，會安裝到 ~/.codex/skills。
-例如：kc-skills install ig-21 --codex
+如果你用的是 Gemini（Gemini CLI、Antigravity），加上 --gemini，會安裝到 ~/.gemini/skills。
+例如：kc-skills install ig-21 --gemini
 `);
 }
 

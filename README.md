@@ -29,3 +29,22 @@ npx github:KCKC-TW/kc-skills-cli update     # 更新已安裝的技能包
 ```bash
 npx github:KCKC-TW/kc-skills-cli install ig-21 --codex
 ```
+
+## 用 Gemini（Gemini CLI、Antigravity）？
+
+加上 `--gemini`，技能會裝到 `~/.gemini/skills/`：
+
+```bash
+npx github:KCKC-TW/kc-skills-cli install ig-21 --gemini
+```
+
+Gemini 這類會等指令結束才顯示畫面的環境，登入請分兩步：
+
+```bash
+npx github:KCKC-TW/kc-skills-cli login --start    # 只顯示確認碼與網址，立刻結束
+# 到網頁核對確認碼並按「授權這台電腦」
+npx github:KCKC-TW/kc-skills-cli login --finish   # 確認登入完成（沒好就再執行一次）
+```
+
+> 注意：網頁版的 Gemini 聊天視窗無法在你的電腦上執行指令，只能教你自己貼到終端機。
+> 想讓 AI 代為安裝，請用 Gemini CLI 或 Antigravity 這類能操作電腦的工具。
